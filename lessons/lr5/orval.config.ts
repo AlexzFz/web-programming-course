@@ -9,7 +9,6 @@ export default defineConfig({
       mode: 'tags-split',
       target: './generated/api',
       client: 'react-query',
-      baseUrl: 'http://localhost:3000',
       override: {
         mutator: {
           path: './src/api/client.ts',

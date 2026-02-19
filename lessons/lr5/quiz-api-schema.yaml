@@ -54,24 +54,24 @@ paths:
                 example: https://github.com/login/oauth/authorize?client_id=...
 
   /api/auth/github/callback:
-    get:
+    post:
       tags:
         - Auth
-      summary: Callback после авторизации GitHub
-      description: Обрабатывает callback от GitHub и создает сессию пользователя
-      parameters:
-        - name: code
-          in: query
-          required: true
-          schema:
-            type: string
-          description: Authorization code от GitHub
-        - name: state
-          in: query
-          required: false
-          schema:
-            type: string
-          description: State parameter для защиты от CSRF
+      summary: Callback после авторизации GitHub (основной метод)
+      description: Обрабатывает OAuth callback от GitHub, обменивает code на access_token и создает сессию пользователя
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+              properties:
+                code:
+                  type: string
+                  description: Authorization code от GitHub
+                  example: "abc123def456"
       responses:
         '200':
           description: Успешная авторизация
@@ -81,8 +81,38 @@ paths:
                 $ref: '#/components/schemas/AuthResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Ошибка при обмене кода или получении данных от GitHub
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "ServerError"
+                message: "Failed to authenticate with GitHub"
+
+    get:
+      tags:
+        - Auth
+      summary: Callback после авторизации GitHub (legacy)
+      description: Устаревший метод для обратной совместимости. Возвращает mock-данные первого студента.
+      deprecated: true
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Authorization code от GitHub (игнорируется в mock-версии)
+      responses:
+        '200':
+          description: Успешная авторизация (mock)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /api/auth/me:
     get:
@@ -100,6 +130,74 @@ paths:
                 $ref: '#/components/schemas/User'
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/profile:
+    put:
+      tags:
+        - Auth
+      summary: Обновить профиль пользователя
+      description: Обновление профиля (имя, фамилия) после авторизации через GitHub
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - firstName
+                - lastName
+              properties:
+                firstName:
+                  type: string
+                  minLength: 1
+                  example: "Иван"
+                lastName:
+                  type: string
+                  minLength: 1
+                  example: "Иванов"
+      responses:
+        '200':
+          description: Профиль обновлен
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                  - githubId
+                  - githubUsername
+                  - avatarUrl
+                  - firstName
+                  - lastName
+                  - role
+                properties:
+                  id:
+                    type: string
+                  githubId:
+                    type: integer
+                  githubUsername:
+                    type: string
+                  avatarUrl:
+                    type: string
+                  firstName:
+                    type: string
+                  lastName:
+                    type: string
+                  role:
+                    $ref: '#/components/schemas/UserRole'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "ValidationError"
+                message: "firstName is required"
 
   /api/auth/logout:
     post:
@@ -885,14 +983,46 @@ components:
           description: JWT токен
           example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
         user:
-          $ref: '#/components/schemas/User'
+          type: object
+          required:
+            - id
+            - githubId
+            - githubUsername
+            - avatarUrl
+            - role
+          properties:
+            id:
+              type: string
+              example: "usr_123"
+            githubId:
+              type: integer
+              description: GitHub user ID
+              example: 12345678
+            githubUsername:
+              type: string
+              description: GitHub username
+              example: "johndoe"
+            avatarUrl:
+              type: string
+              format: uri
+              description: URL аватара с GitHub
+              example: "https://avatars.githubusercontent.com/u/12345678"
+            firstName:
+              type: string
+              example: "John"
+            lastName:
+              type: string
+              example: "Doe"
+            role:
+              $ref: '#/components/schemas/UserRole'
 
     User:
       type: object
       required:
         - id
         - githubId
-        - username
+        - githubUsername
+        - avatarUrl
         - role
         - createdAt
       properties:
@@ -900,10 +1030,10 @@ components:
           type: string
           example: "usr_123"
         githubId:
-          type: string
+          type: integer
           description: GitHub user ID
-          example: "12345678"
-        username:
+          example: 12345678
+        githubUsername:
           type: string
           description: GitHub username
           example: "johndoe"
@@ -912,6 +1042,12 @@ components:
           format: uri
           description: URL аватара с GitHub
           example: "https://avatars.githubusercontent.com/u/12345678"
+        firstName:
+          type: string
+          example: "John"
+        lastName:
+          type: string
+          example: "Doe"
         email:
           type: string
           format: email
