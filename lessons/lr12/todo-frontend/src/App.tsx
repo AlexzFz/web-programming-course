@@ -8,14 +8,13 @@ type ServerTodo = {
   updatedAt: string;
 };
 
-// TODO(PWA): расширьте типы под офлайн-очередь операций.
-type QueueAction = {
-  id: string;
-  type: 'create' | 'toggle' | 'delete';
-  ts: number;
-};
+type QueueAction =
+  | { id: string; type: 'create'; payload: { title: string }; ts: number }
+  | { id: string; type: 'toggle'; payload: { todoId: number; done: boolean }; ts: number }
+  | { id: string; type: 'delete'; payload: { todoId: number }; ts: number };
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
+const QUEUE_STORAGE_KEY = 'todo-pwa-queue-v1';
 
 function toLocalText(value: string) {
   const normalized = value.includes(' ') ? value.replace(' ', 'T') : value;
@@ -71,7 +70,11 @@ async function apiDelete(todoId: number): Promise<void> {
 }
 
 function registerServiceWorkerStarter() {
-  // TODO(PWA-1): зарегистрируйте Service Worker.
+  if (!('serviceWorker' in navigator)) return;
+
+  void navigator.serviceWorker.register('/sw.js').catch(() => {
+    // Keep app usable even if SW registration fails.
+  });
 }
 
 export default function App() {
@@ -80,12 +83,55 @@ export default function App() {
   const [message, setMessage] = useState<string>('');
   const [inputValue, setInputValue] = useState<string>('');
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
-  const [queueActions] = useState<QueueAction[]>([]);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [queueActions, setQueueActions] = useState<QueueAction[]>(() => {
+    try {
+      const raw = localStorage.getItem(QUEUE_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as QueueAction[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
 
   const refreshFromServer = useCallback(async () => {
     const serverTodos = await apiFetchTodos();
     setTodos(serverTodos);
   }, []);
+
+  const enqueueAction = useCallback((action: QueueAction) => {
+    setQueueActions((prev) => [...prev, action]);
+  }, []);
+
+  const processQueue = useCallback(async () => {
+    if (!navigator.onLine || queueActions.length === 0 || isSyncing) return;
+
+    setIsSyncing(true);
+    let processed = 0;
+
+    try {
+      for (const action of queueActions) {
+        if (action.type === 'create') {
+          await apiCreate(action.payload.title);
+        } else if (action.type === 'toggle') {
+          await apiToggle(action.payload.todoId, action.payload.done);
+        } else if (action.type === 'delete') {
+          await apiDelete(action.payload.todoId);
+        }
+        processed += 1;
+      }
+
+      setQueueActions((prev) => prev.slice(processed));
+      await refreshFromServer();
+      setMessage('Офлайн-очередь синхронизирована.');
+    } catch {
+      setQueueActions((prev) => prev.slice(processed));
+      setMessage('Синхронизация остановлена: часть действий останется в очереди.');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [isSyncing, queueActions, refreshFromServer]);
 
   const onCreate = useCallback(
     async (title: string) => {
@@ -97,25 +143,38 @@ export default function App() {
         await refreshFromServer();
         setMessage('Задача добавлена.');
       } catch {
-        // TODO(PWA-3): если сеть недоступна, положить create-действие в офлайн-очередь.
-        setMessage('Не удалось добавить задачу. Реализуйте офлайн-очередь для этого сценария.');
+        enqueueAction({
+          id: crypto.randomUUID(),
+          type: 'create',
+          payload: { title: trimmed },
+          ts: Date.now(),
+        });
+        setMessage('Сети нет: добавление сохранено в офлайн-очередь.');
       }
     },
-    [refreshFromServer]
+    [enqueueAction, refreshFromServer]
   );
 
   const onToggle = useCallback(
     async (todo: ServerTodo) => {
       try {
-        await apiToggle(todo.id, !todo.done);
+        const nextDone = !todo.done;
+        await apiToggle(todo.id, nextDone);
         await refreshFromServer();
         setMessage('Статус обновлен.');
       } catch {
-        // TODO(PWA-3): при ошибке сети не терять toggle-действие, а складывать в очередь.
-        setMessage('Не удалось обновить статус. Добавьте fallback в офлайн-очередь.');
+        const nextDone = !todo.done;
+        setTodos((prev) => prev.map((item) => (item.id === todo.id ? { ...item, done: nextDone } : item)));
+        enqueueAction({
+          id: crypto.randomUUID(),
+          type: 'toggle',
+          payload: { todoId: todo.id, done: nextDone },
+          ts: Date.now(),
+        });
+        setMessage('Сети нет: изменение статуса сохранено в очереди.');
       }
     },
-    [refreshFromServer]
+    [enqueueAction, refreshFromServer]
   );
 
   const onDelete = useCallback(
@@ -125,11 +184,17 @@ export default function App() {
         await refreshFromServer();
         setMessage('Задача удалена.');
       } catch {
-        // TODO(PWA-3): при ошибке сети не терять delete-действие, а складывать в очередь.
-        setMessage('Не удалось удалить задачу. Добавьте fallback в офлайн-очередь.');
+        setTodos((prev) => prev.filter((item) => item.id !== todo.id));
+        enqueueAction({
+          id: crypto.randomUUID(),
+          type: 'delete',
+          payload: { todoId: todo.id },
+          ts: Date.now(),
+        });
+        setMessage('Сети нет: удаление сохранено в очереди.');
       }
     },
-    [refreshFromServer]
+    [enqueueAction, refreshFromServer]
   );
 
   const onSubmit = useCallback(
@@ -141,6 +206,10 @@ export default function App() {
     },
     [inputValue, onCreate]
   );
+
+  useEffect(() => {
+    localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queueActions));
+  }, [queueActions]);
 
   useEffect(() => {
     registerServiceWorkerStarter();
@@ -169,13 +238,26 @@ export default function App() {
   }, [refreshFromServer]);
 
   useEffect(() => {
-    // TODO(PWA-2): добавьте обработчики online/offline.
-    // window.addEventListener('online', ...)
-    // window.addEventListener('offline', ...)
-    // и обновляйте isOnline + message.
+    const handleOnline = () => {
+      setIsOnline(true);
+      setMessage('Сеть восстановлена.');
+      void processQueue();
+    };
 
+    const handleOffline = () => {
+      setIsOnline(false);
+      setMessage('Вы офлайн. Доступны только локальные/кэшированные данные.');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
     setIsOnline(navigator.onLine);
-  }, []);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [processQueue]);
 
   return (
     <main className="app">
@@ -198,19 +280,19 @@ export default function App() {
           onChange={(event) => setInputValue(event.target.value)}
         />
         <button type="submit">Добавить</button>
-        <button type="button" disabled>
-          Синхронизация (TODO)
+        <button type="button" onClick={() => void processQueue()} disabled={!isOnline || queueActions.length === 0 || isSyncing}>
+          {isSyncing ? 'Синхронизация...' : 'Синхронизировать'}
         </button>
       </form>
 
       <section className="meta">
         <span className="badge">Офлайн-очередь: {queueActions.length}</span>
-        <span className="badge">sync: TODO</span>
+        <span className="badge">sync: {isSyncing ? 'running' : 'idle'}</span>
       </section>
 
       <section className="todo-note">
         <p>
-          TODO(PWA-4): реализуйте очередь операций и автоматическую отправку после события <code>online</code>.
+          Офлайн-действия сохраняются в локальную очередь и отправляются после восстановления сети.
         </p>
       </section>
 
