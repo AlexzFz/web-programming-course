@@ -1,0 +1,53 @@
+# dev
+.yarn/
+!.yarn/releases
+.vscode/*
+!.vscode/launch.json
+!.vscode/*.code-snippets
+.idea/workspace.xml
+.idea/usage.statistics.xml
+.idea/shelf
+
+# deps
+node_modules/
+
+# env
+.env
+.env.production
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# misc
+.DS_Store
+
+/src/generated/prisma
+
+# local sqlite databases
+dev.db
+prisma/dev.db
+
+# LR9 backend artifacts
+lessons/lr9/quiz-backend/node_modules/
+lessons/lr9/quiz-backend/dist/
+lessons/lr9/quiz-backend/docs/
+
+# Env and local DB
+lessons/lr9/quiz-backend/.env
+lessons/lr9/quiz-backend/dev.db
+lessons/lr9/quiz-backend/*.db-journal
+
+# Logs / OS junk
+lessons/lr9/quiz-backend/*.log
+**/.DS_Store
+
+# LR11 local artifacts
+coverage/
+scripts/.release-current
+scripts/.release-previous

@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint-test-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: lessons/lr11/quiz-backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: lessons/lr11/quiz-backend
+        run: npm ci
+
+      - name: Lint
+        working-directory: lessons/lr11/quiz-backend
+        run: npm run lint
+
+      - name: Test
+        working-directory: lessons/lr11/quiz-backend
+        run: npm run test
+
+      - name: Build
+        working-directory: lessons/lr11/quiz-backend
+        run: npm run build
+
+      - name: Docker build
+        working-directory: lessons/lr11/quiz-backend
+        run: docker build -t quiz-backend:ci .
